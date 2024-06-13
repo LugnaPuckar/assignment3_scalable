@@ -23,7 +23,7 @@ rm -rf .git
 
 # Emptying and delete the S3 bucket
 aws s3 rm s3://$BUCKETNAME --recursive
-aws s3api delete-bucket --bucket $BUCKETNAME --region eu-west-1
+aws s3api delete-bucket --bucket $BUCKETNAME --region $REGION
 
 else
     echo "Skipping... Nothing was deleted."
