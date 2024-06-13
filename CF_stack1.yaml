@@ -1,0 +1,382 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  FromEmail:
+    Type: String
+    Description: Email FROM address that sends notifications.
+
+  ToEmail:
+    Type: String
+    Description: Email TO address that receives notifications.
+
+  S3BucketName:
+    Type: String
+    Description: Must be globally unique. Used for the S3 bucket name.
+    Default: very-cool-and-unique-contacts-assignment3
+
+Resources:
+
+  # CodeCommit Repository - ContactForm
+  MyCodeCommitRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: ContactForm
+
+  # S3 Bucket - Contacts for the index.html
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties: 
+      BucketName: !Ref S3BucketName
+      WebsiteConfiguration:
+        IndexDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  S3BucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties: 
+      Bucket: !Ref S3Bucket
+      PolicyDocument: 
+        Version: '2012-10-17'
+        Statement: 
+          - Sid: PublicAccessGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: 
+              - s3:GetObject
+            Resource: 
+              - !Sub "arn:aws:s3:::${S3Bucket}/*"
+
+  # DynamoDB Table - Contacts
+  DynamoDBContactsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Contacts
+      AttributeDefinitions:
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: timestamp
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+
+  # Lambda Function - AddContactInfo
+  # And related resources such as API, Role.
+  LambdaRoleToAccessDynamoDB:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: LambdaRoleToAccessDynamoDB
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess'
+
+  AddContactInfoLambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaRoleToAccessDynamoDB
+    Properties:
+      FunctionName: AddContactInfo
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaRoleToAccessDynamoDB.Arn
+      Runtime: python3.12
+      Code:
+        ZipFile: |
+          import json                     # used for converting json strings to Python objects
+          import boto3                    # handles AWS
+          from datetime import datetime   # used for creating the timestamp
+
+          def lambda_handler(event, context):
+              # Connect to the DynamoDB table
+              db = boto3.resource('dynamodb')
+              table = db.Table('Contacts')
+
+              # Create the time stamp
+              dateTime = (datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+
+              try:
+                  # Get the contact info from the request
+                  payload = json.loads(event['body'])
+
+                  # Add a row with contact info to DynamoDB
+                  table.put_item(
+                      Item={
+                          'timestamp': dateTime,
+                          'name': payload['name'],
+                          'email': payload['email'],
+                          'message': payload['msg']
+                      }
+                  )
+
+                  # Return success
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps('Successfully saved contact info!'),
+                      'headers': {
+                          "Access-Control-Allow-Origin": "*",
+                          "Access-Control-Allow-Credentials": True,
+                      }
+                  }
+
+              except:
+                  # Return error
+                  return {
+                      'statusCode': 400,
+                      'body': json.dumps('Error saving contact info'),
+                      'headers': {
+                          "Access-Control-Allow-Origin": "*",
+                          "Access-Control-Allow-Credentials": True,
+                      }
+                  }
+
+  ApiGatewayRestApi:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: "ContactApi"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  ApiGatewayResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: "AddContactInfo"
+
+  ApiGatewayMethod:
+    Type: "AWS::ApiGateway::Method"
+    DependsOn: AddContactInfoLambdaFunction
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiGatewayResource
+      HttpMethod: "POST"
+      AuthorizationType: "NONE"
+      Integration:
+        IntegrationHttpMethod: "POST"
+        Type: "AWS_PROXY"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AddContactInfoLambdaFunction.Arn}/invocations"
+      ApiKeyRequired: false
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseModels:
+            application/json: "Empty"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: "'*'"
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+            method.response.header.Access-Control-Allow-Methods: "'OPTIONS,POST'"
+
+  ApiGatewayOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      ResourceId: !Ref ApiGatewayResource
+      RestApiId: !Ref ApiGatewayRestApi
+      Integration:
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'OPTIONS,POST'"
+        RequestTemplates:
+          application/json: "{statusCode:200}"
+        Type: MOCK
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: "'*'"
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+            method.response.header.Access-Control-Allow-Methods: "'OPTIONS,POST'"
+
+  ApiGatewayDeployment:
+    Type: "AWS::ApiGateway::Deployment"
+    DependsOn:
+    - ApiGatewayMethod
+    - ApiGatewayOptionsMethod
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      StageName: "default"
+
+  AddContactInfoPermission:
+    Type: "AWS::Lambda::Permission"
+    DependsOn: ApiGatewayMethod
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref AddContactInfoLambdaFunction
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*/*/AddContactInfo"
+
+  # SES Lambda Function
+  # And related resources such as API, Role.
+  LambdaRoleToAccessSES:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: LambdaRoleToAccessSES
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AmazonSESFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess'
+
+  SendContactInfoEmailLambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaRoleToAccessSES
+    Properties:
+      FunctionName: SendContactInfoEmail
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaRoleToAccessSES.Arn
+      Runtime: python3.12
+      Code:
+        ZipFile:
+          Fn::Sub: |
+            import json
+            import boto3
+
+            # Initialize the DynamoDB client
+            dynamodb = boto3.resource('dynamodb')
+            table = dynamodb.Table('Contacts')  # Replace with your DynamoDB table name
+
+            def lambda_handler(event, context):
+                # Scan the DynamoDB table
+                result = table.scan()
+                items = result['Items']
+
+                ses = boto3.client('ses')
+
+                body = f"""
+                Contact Information:
+                {items}
+                """
+
+                ses.send_email(
+                    Source='${FromEmail}',
+                    Destination={
+                        'ToAddresses': [
+                            '${ToEmail}'
+                        ]
+                    },
+                    Message={
+                        'Subject': {
+                            'Data': 'Contact Info Notification',
+                            'Charset': 'UTF-8'
+                        },
+                        'Body': {
+                            'Text': {
+                                'Data': body,
+                                'Charset': 'UTF-8'
+                            }
+                        }
+                    }
+                )
+
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps('Successfully sent email from Lambda using Amazon SES')
+                }
+
+  DynamoDBLambdaTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: SendContactInfoEmailLambdaFunction
+    Properties:
+      BatchSize: 1
+      EventSourceArn: !GetAtt DynamoDBContactsTable.StreamArn
+      FunctionName: !GetAtt SendContactInfoEmailLambdaFunction.Arn
+      StartingPosition: LATEST
+
+  # CodePipeline, IAM Role
+  MyPipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: MyPipelineRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:UploadArchive
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource: '*'
+
+  MyPipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    DependsOn: MyPipelineRole
+    Properties:
+      Name: ContactPipeline
+      RoleArn: !GetAtt MyPipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref S3Bucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: '1'
+              Configuration:
+                RepositoryName: ContactForm
+                BranchName: main
+              OutputArtifacts:
+                - Name: SourceOutput
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: DeployAction
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: S3
+                Version: '1'
+              Configuration:
+                Extract: 'true'
+                BucketName: !Ref S3Bucket
+              InputArtifacts:
+                - Name: SourceOutput
+              RunOrder: 1
+
+
+# Outputs for remaining script steps.
+Outputs:
+
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL for AddContactInfo function"
+    Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/default/AddContactInfo"
+
+  WebsiteURL:
+    Value: !Sub "http://${S3Bucket}.s3-website-${AWS::Region}.amazonaws.com"
+    Description: "URL for website hosted on S3"
