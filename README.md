@@ -7,6 +7,7 @@ You must have access to the email addresses for verification.
 
 * ./main_run.sh "EMAILSENDFROM" "EMAILSENDTO" "STACKNAME" "SETBUCKETNAME" "REGION"
 
+stackname, bucketname and region have default values. Emails are a must.
 * Example: ./main_run.sh "sendFROM@email.com" "sendTO@email.com" "stackname" "bucketname" "eu-west-1"
 
 # Requirements
