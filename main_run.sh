@@ -59,6 +59,7 @@ aws cloudformation wait stack-create-complete --stack-name $STACKNAME
 
 # Print the URL of the website.
 WEBSITEURL=$(aws cloudformation describe-stacks --stack-name $STACKNAME --query "Stacks[0].Outputs[?OutputKey=='WebsiteURL'].OutputValue" --output text)
+echo ""
 echo "-----------------------------------------------------"
 echo "The contact form website is soon available at:" 
 echo "$WEBSITEURL"

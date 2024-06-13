@@ -332,7 +332,9 @@ Resources:
 
   MyPipeline:
     Type: 'AWS::CodePipeline::Pipeline'
-    DependsOn: MyPipelineRole
+    DependsOn:
+    - MyPipelineRole
+    - S3Bucket
     Properties:
       Name: ContactPipeline
       RoleArn: !GetAtt MyPipelineRole.Arn
